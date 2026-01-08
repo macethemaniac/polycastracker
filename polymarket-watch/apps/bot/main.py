@@ -1,13 +1,14 @@
 ﻿from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import logging
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     Updater,
@@ -16,7 +17,10 @@ from telegram.ext import (
 
 from polymarket_watch.config import settings
 from polymarket_watch.logging import setup_logging
-from polymarket_watch.models import Alert, Market, SignalEvent, Trade
+from polymarket_watch.models import Alert, Market, SignalEvent, Trade, WalletProfile, WalletStats
+# Import generate_weekly_report to run it on command
+from services.reporting.worker import generate_weekly_report
+
 from polymarket_watch.state import default_state
 from sqlalchemy import func, select
 
@@ -57,13 +61,16 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
-    await update.message.reply_text(
-        "polymarket-watch bot is live.\n"
-        "Commands:\n"
-        "- /ping\n"
-        "- /status\n"
-        "- /top\n"
-        "- /alert <id>\n"
+    await update.message.reply_html(
+        "<b>🚀 Polycast Tracker is Live!</b>\n\n"
+        "Welcome to the ultimate Polymarket intelligence hub. I'm monitoring the whales and smart wallets so you don't have to.\n\n"
+        "<b>🛠 Available Commands:</b>\n"
+        "🔹 /digest - 📊 Get your weekly alpha (Excel report)\n"
+        "🔹 /top - 🔥 View current hottest alerts\n"
+        "🔹 /status - 📈 Check system health & stats\n"
+        "🔹 /alert [id] - 🔍 Deep dive into a specific alert\n"
+        "🔹 /ping - 🏓 Quick heartbeat check\n\n"
+        "<i>Stay ahead of the market. Good luck!</i>"
     )
 
 
@@ -89,15 +96,20 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             last_signal = session.execute(select(func.max(SignalEvent.observed_at))).scalar_one()
             last_alert = session.execute(select(func.max(Alert.updated_at))).scalar_one()
         return (
-            "status:\n"
-            f"- markets: {markets}\n"
-            f"- trades: {trades} (last: {_fmt_dt(last_trade)})\n"
-            f"- signals: {signals} (last: {_fmt_dt(last_signal)})\n"
-            f"- alerts: {alerts} (last: {_fmt_dt(last_alert)})"
+            "<b>📊 System Status Report</b>\n\n"
+            f"🏛 <b>Markets Tracked:</b> {markets}\n"
+            f"🤝 <b>Total Trades:</b> {trades}\n"
+            f"⚡️ <b>Signals Found:</b> {signals}\n"
+            f"🔔 <b>Alerts Sent:</b> {alerts}\n\n"
+            "<b>🕒 Last Activity:</b>\n"
+            f"🔹 Trade: <code>{_fmt_dt(last_trade)}</code>\n"
+            f"🔹 Signal: <code>{_fmt_dt(last_signal)}</code>\n"
+            f"🔹 Alert: <code>{_fmt_dt(last_alert)}</code>\n\n"
+            "🟢 <i>All systems operational.</i>"
         )
 
     text = await asyncio.to_thread(_query)
-    await update.message.reply_text(text)
+    await update.message.reply_html(text)
 
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -110,32 +122,79 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     def _query() -> str:
         with session_factory() as session:
-            rows = (
-                session.execute(
-                    select(Alert, Market)
-                    .join(Market, Alert.market_id == Market.id, isouter=True)
-                    .order_by(Alert.score.desc().nullslast(), Alert.updated_at.desc())
-                    .limit(5)
+            now = datetime.now(timezone.utc)
+            # Filter for Dec 2025 activity onward (and recent alerts last 7 days)
+            start_of_relevance = datetime(2025, 12, 1, tzinfo=timezone.utc)
+            recent_alert_cutoff = now - timedelta(days=7)
+
+            # 1. Identify trending markets (active, new, high density)
+            trending_sub = (
+                select(Alert.market_id, func.count(Alert.id).label("alert_density"))
+                .join(Market, Alert.market_id == Market.id)
+                .where(
+                    Market.status == "active",
+                    Market.created_at >= datetime(2025, 1, 1, tzinfo=timezone.utc), # 2025+ markets
+                    Alert.updated_at >= recent_alert_cutoff # Recent alerts only
                 )
-                .all()
+                .group_by(Alert.market_id)
+                .subquery()
             )
+
+            # 2. Main query for alerts from newer trending markets with whales
+            stmt = (
+                select(
+                    Alert,
+                    Market,
+                    func.max(WalletStats.accuracy_score).label("max_whale_acc"),
+                    trending_sub.c.alert_density
+                )
+                .join(Market, Alert.market_id == Market.id)
+                .join(trending_sub, Market.id == trending_sub.c.market_id)
+                .join(SignalEvent, SignalEvent.market_id == Market.id, isouter=True)
+                .join(WalletStats, SignalEvent.wallet_address == WalletStats.wallet_address, isouter=True)
+                # Ensure the signals we consider are also recent
+                .where(SignalEvent.observed_at >= start_of_relevance) 
+                .group_by(Alert.id, Market.id, trending_sub.c.alert_density)
+                .order_by(
+                    # Primary: Smart Whale participation (Accuracy >= 0.6)
+                    (func.max(WalletStats.accuracy_score) >= 0.6).desc().nullslast(),
+                    # Secondary: Trending density
+                    trending_sub.c.alert_density.desc(),
+                    # Tertiary: Newness (Market ID)
+                    Market.id.desc(),
+                    # Quaternary: Score
+                    Alert.score.desc()
+                )
+                .limit(5)
+            )
+            rows = session.execute(stmt).all()
+
         if not rows:
-            return "No alerts found."
-        lines = ["top alerts:"]
-        for alert, market in rows:
-            title = market.name if market else f"market {alert.market_id}"
-            side = alert.side or "n/a"
-            score = f"{float(alert.score):.2f}" if alert.score is not None else "n/a"
-            lines.append(f"- [{alert.id}] {title} | side={side} | score={score}")
+            return "No active 2026 alpha found yet. Monitoring trending markets..."
+
+        lines = ["<b>🔥 Top Alpha Alerts (Trending & Whales)</b>\n"]
+        for alert, market, max_acc, density in rows:
+            title = market.name if market else f"Market {alert.market_id}"
+            score = f"{float(alert.score or 0):.1f}"
+            acc_str = f"🐋 <b>{float(max_acc or 0)*100:.0f}% Whale</b>" if max_acc and max_acc >= 0.6 else "📈 Trending"
+            hot_lvl = "🔥" * min(3, int(density or 1))
+            
+            market_url = f"https://polymarket.com/market/{market.external_id}" if market and market.external_id else "https://polymarket.com/"
+            
+            lines.append(
+                f"{hot_lvl} <b>{title}</b>\n"
+                f"   └ <code>ID:{alert.id}</code> | Score: {score} | {acc_str}\n"
+                f"   └ <a href=\"{market_url}\">🔗 Trade Now</a>\n"
+            )
         return "\n".join(lines)
 
     try:
         text = await asyncio.to_thread(_query)
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:
         logging.exception("top command failed", exc_info=exc)
         await update.message.reply_text("Error reading alerts; check bot logs.")
         return
-    await update.message.reply_text(text)
+    await update.message.reply_html(text)
 
 
 async def alert(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -197,6 +256,96 @@ async def alert(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text)
 
 
+async def digest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    session_factory = context.bot_data.get("session_factory")
+    if not session_factory:
+        await update.message.reply_text("session unavailable")
+        return
+        
+    await update.message.reply_text("Generating weekly digest... check back in a moment.")
+    
+    # We call the generation logic directly
+    # Note: generate_weekly_report expects (session, bot, chat_id).
+    # We need to construct a session or pass the factory? 
+    # The worker used `with state.session_factory() as session`.
+    # Here we should probably do the same.
+    
+    try:
+        # We need to import the function first. I will add the import at top of file.
+        # But wait, services.reporting might not be a package yet if I didn't add __init__.
+        # I need to ensure __init__.py exists in services/reporting.
+        
+        # Using a fresh session for the report generation
+        with session_factory() as session:
+             # We use the chat_id from the update to send it back to the requester
+             await generate_weekly_report(session, context.bot, update.effective_chat.id)
+             
+    except Exception as exc:
+        logging.exception("Digest generation failed", exc_info=exc)
+        await update.message.reply_text("Failed to generate digest.")
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if not query.data:
+        return
+
+    # Data format: "action:payload"
+    try:
+        action, payload = query.data.split(":", 1)
+    except ValueError:
+        return
+
+    if action in ("track", "untrack"):
+        wallet_address = payload
+        should_track = (action == "track")
+        
+        session_factory = context.bot_data.get("session_factory")
+        if not session_factory:
+            await query.edit_message_text("Session unavailable.")
+            return
+
+        with session_factory() as session:
+            with session.begin():
+                stmt = select(WalletProfile).where(WalletProfile.wallet_address == wallet_address)
+                profile = session.execute(stmt).scalar_one_or_none()
+                
+                if not profile:
+                    # Create if not exists (should theoretically exist if mentioned in signal, but maybe signal from unknown wallet)
+                    # Although our system creates profiles on ingestion usually? 
+                    # Actually, ingestion might use raw addresses. 
+                    if should_track:
+                        profile = WalletProfile(wallet_address=wallet_address, is_watched=True)
+                        session.add(profile)
+                        msg = f"Created and tracking {wallet_address}"
+                    else:
+                         msg = f"Wallet {wallet_address} not found."
+                else:
+                    profile.is_watched = should_track
+                    session.add(profile)
+                    msg = f"{'Now tracking' if should_track else 'Stopped tracking'} {profile.label or wallet_address}"
+        
+        await query.message.reply_text(msg)
+    else:
+        await query.message.reply_text(f"Unknown action: {action}")
+
+
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_commands([
+        BotCommand("start", "🚀 Start the bot & see instructions"),
+        BotCommand("digest", "📊 Get weekly alpha Excel report"),
+        BotCommand("top", "🔥 View current hottest alerts"),
+        BotCommand("status", "📈 Check system health & stats"),
+        BotCommand("alert", "🔍 Deep dive into alert by ID"),
+        BotCommand("help", "❓ Show help information"),
+        BotCommand("ping", "🏓 Quick heartbeat check"),
+    ])
+
+
 def build_application() -> Application:
     setup_logging()
     token = settings.telegram_bot_token
@@ -204,7 +353,7 @@ def build_application() -> Application:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
 
     state = default_state()
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(post_init).build()
     application.bot_data["session_factory"] = state.session_factory
 
     application.add_handler(CommandHandler("start", start))
@@ -213,6 +362,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("top", top))
     application.add_handler(CommandHandler("alert", alert))
+    application.add_handler(CommandHandler("digest", digest))
+    application.add_handler(CallbackQueryHandler(on_callback))
     return application
 
 

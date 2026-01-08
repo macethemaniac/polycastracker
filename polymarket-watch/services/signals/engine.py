@@ -36,20 +36,20 @@ class Signal:
 
 
 class SignalEngine:
-    BIG_NOTIONAL = Decimal("1000")
+    BIG_NOTIONAL = Decimal("400")
     LOW_ACTIVITY_WINDOW = timedelta(hours=24)
     LOW_ACTIVITY_MAX_TRADES = 2
     REPEAT_WINDOW = timedelta(minutes=10)
     REPEAT_MIN_COUNT = 3
     IMPACT_DEVIATION = Decimal("0.05")
-    IMPACT_MIN_NOTIONAL = Decimal("500")
+    IMPACT_MIN_NOTIONAL = Decimal("200")
     CLUSTER_WINDOW = timedelta(minutes=5)
     CLUSTER_MIN_WALLETS = 3
     CLUSTER_MIN_NOTIONAL = Decimal("200")
     # Early positioning thresholds
-    SMART_WALLET_MIN_ACCURACY = Decimal("0.60")
+    SMART_WALLET_MIN_ACCURACY = Decimal("0.50")
     SMART_WALLET_MIN_TRADES = 5
-    SMART_WALLET_MIN_NOTIONAL = Decimal("100")
+    SMART_WALLET_MIN_NOTIONAL = Decimal("50")
 
     def __init__(self, now: datetime | None = None) -> None:
         self.now = now or datetime.now(timezone.utc)

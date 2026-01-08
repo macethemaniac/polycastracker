@@ -101,6 +101,8 @@ class IngestionClient:
             params["startTime"] = int(ts.timestamp() * 1000)
 
         resp = self._client.get(self.trades_url, params=params)
+        if resp.status_code == 404:
+            return []
         resp.raise_for_status()
         payload = resp.json()
         raw_trades: Iterable[Any]

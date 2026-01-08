@@ -4,7 +4,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Numeric, String, Text, func, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, func, UniqueConstraint
+
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -50,6 +51,7 @@ class WalletProfile(Base):
     wallet_address: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     label: Mapped[str | None] = mapped_column(String(255))
     risk_level: Mapped[str | None] = mapped_column(String(50))
+    is_watched: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     notes: Mapped[str | None] = mapped_column(Text())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

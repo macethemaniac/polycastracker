@@ -35,8 +35,8 @@ class ScoringAggregator:
         weights: dict[str, float] | None = None,
         severity_multipliers: dict[str, float] | None = None,
         bonus_per_extra_type: float = 2.5,
-        high_threshold: float = 12.0,
-        watch_threshold: float = 4.0,
+        high_threshold: float = 8.0,
+        watch_threshold: float = 2.0,
     ) -> None:
         self.window = window or timedelta(hours=2)
         self.weights = weights or {
