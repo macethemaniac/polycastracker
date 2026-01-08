@@ -133,6 +133,13 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 .join(Market, Alert.market_id == Market.id)
                 .where(
                     Market.status == "active",
+                    # Stricter Name filtering: Exclude past years
+                    Market.name.not_like("%2021%"),
+                    Market.name.not_like("%2022%"),
+                    Market.name.not_like("%2023%"),
+                    Market.name.not_like("%2024%"),
+                    # Ensure resolved_at is future or null
+                    (Market.resolved_at == None) | (Market.resolved_at > now),
                     Market.created_at >= datetime(2025, 1, 1, tzinfo=timezone.utc), # 2025+ markets
                     Alert.updated_at >= recent_alert_cutoff # Recent alerts only
                 )

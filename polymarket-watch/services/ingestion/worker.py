@@ -4,7 +4,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Iterable
 
 from sqlalchemy import select
@@ -151,6 +151,12 @@ def poll_market_trades(
 ) -> tuple[int, datetime | None]:
     with state.session_factory() as session:
         since = _load_cursor(session, market.external_id)
+        if since is None:
+            # For new markets, start with a 7-day lookback to avoid ancient history
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            logger.info("Initializing new market cursor", extra={"market": market.external_id, "since": since.isoformat()})
+            _store_cursor(session, market.external_id, since)
+            
         trades = client.fetch_recent_trades(market.external_id, since)
         inserted, latest_at = insert_trades(session, trades, {market.external_id: market})
         if latest_at:
