@@ -16,6 +16,7 @@ from polymarket_watch.models import Alert, SignalEvent
 class AggregatedSignals:
     market_id: int
     side: str | None
+    wallet_address: str | None
     score: float
     status: str
     why_json: dict[str, Any]
@@ -65,10 +66,10 @@ class ScoringAggregator:
         weight = self.weights.get(signal.signal_type, 1.0)
         return weight * self._severity_multiplier(signal.severity)
 
-    def _group_signals(self, signals: Iterable[SignalEvent]) -> dict[tuple[int, str | None], list[SignalEvent]]:
-        grouped: dict[tuple[int, str | None], list[SignalEvent]] = defaultdict(list)
+    def _group_signals(self, signals: Iterable[SignalEvent]) -> dict[tuple[int, str | None, str | None], list[SignalEvent]]:
+        grouped: dict[tuple[int, str | None, str | None], list[SignalEvent]] = defaultdict(list)
         for s in signals:
-            key = (s.market_id, s.side)
+            key = (s.market_id, s.side, s.wallet_address)
             grouped[key].append(s)
         return grouped
 
@@ -126,7 +127,7 @@ class ScoringAggregator:
         )
         grouped = self._group_signals(signals)
         aggregated: list[AggregatedSignals] = []
-        for (market_id, side), items in grouped.items():
+        for (market_id, side, wallet_address), items in grouped.items():
             score = self._compute_group_score(items)
             if score < self.watch_threshold:
                 continue
@@ -136,6 +137,7 @@ class ScoringAggregator:
                 AggregatedSignals(
                     market_id=market_id,
                     side=side,
+                    wallet_address=wallet_address,
                     score=score,
                     status=status,
                     why_json=why_json,
@@ -150,6 +152,7 @@ class ScoringAggregator:
             {
                 "market_id": agg.market_id,
                 "side": agg.side,
+                "wallet_address": getattr(agg, "wallet_address", None),
                 "event_type": "scoring",
                 "status": agg.status,
                 "score": agg.score,
@@ -160,7 +163,7 @@ class ScoringAggregator:
         ]
         stmt = insert(Alert).values(values)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["market_id", "side", "event_type"],
+            index_elements=["market_id", "side", "event_type", "wallet_address"],
             set_={
                 "status": stmt.excluded.status,
                 "score": stmt.excluded.score,

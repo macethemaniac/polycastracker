@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="CHANGEME", description="Telegram bot token")
     telegram_chat_id: str | None = Field(default=None, description="Default Telegram chat id")
     notifier_dry_run: bool = True
-    ingestion_markets_url: str = "https://gamma-api.polymarket.com/markets"
-    ingestion_trades_url: str = "https://gamma-api.polymarket.com/trades"
+    ingestion_markets_url: str = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100&order=volume24hr&ascending=false"
+    ingestion_trades_url: str = "https://data-api.polymarket.com/trades"
     ingestion_markets_refresh_seconds: int = 600
     ingestion_trades_poll_interval_min_seconds: int = 30
     ingestion_trades_poll_interval_max_seconds: int = 60

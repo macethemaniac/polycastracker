@@ -73,25 +73,23 @@ def _build_message(
     market: Optional[Market],
     signals_data: list[tuple[SignalEvent, Optional[WalletProfile], Optional[WalletStats]]],
 ) -> str:
-    # Header: Type - Market Name (Hyperlink)
-    # "Depending on the type label wallet kind and reason as the header eg :Low or high activity market"
-    # We will use the alert event_type and market name.
-    
     market_name = market.name if market else f"Market {alert.market_id}"
     market_url = f"https://polymarket.com/market/{market.external_id}" if market and market.external_id else "https://polymarket.com/"
     
     # Kind of market (using alert event type or reasoning)
     market_kind = alert.event_type.replace("_", " ").title()
-    
-    # Outcome (Yes/No) - extracted from Signal or Alert side
+    if market_kind == "Scoring":
+        market_kind = "Signal detected"
+
+    # Outcome (Yes/No)
     outcome = (alert.side or "n/a").upper()
     
-    header_link = f'<a href="{market_url}">{market_kind} - {market_name}</a>'
+    header_link = f'<a href="{market_url}">{market_name}</a>'
     
     lines = [
+        f"🚨 <b>{market_kind}</b>",
         header_link,
-        f"<b>{market_kind}</b>",
-        f"Outcome: {outcome}",
+        f"Outcome: <b>{outcome}</b>",
         "", # Empty line for spacing
     ]
     
@@ -101,7 +99,7 @@ def _build_message(
         
     for signal, profile, stats in signals_data:
         # Trader Name (Hyperlink)
-        trader_name = profile.label if profile and profile.label else (signal.wallet_address[:6] + "..." if signal.wallet_address else "Unknown")
+        trader_name = profile.label if profile and profile.label else (signal.wallet_address[:8] + "..." if signal.wallet_address else "Unknown")
         trader_url = f"https://polymarket.com/profile/{signal.wallet_address}" if signal.wallet_address else "#"
         trader_link = f'<a href="{trader_url}">{trader_name}</a>'
         
@@ -113,17 +111,17 @@ def _build_message(
         shares = details.get("shares") or details.get("amount") or 0
         try:
              shares_val = float(shares)
-             shares_str = f"{shares_val:,.0f}"
+             shares_str = f"{shares_val:,.0f}" if shares_val >= 1 else f"{shares_val:.4f}"
         except (ValueError, TypeError):
              shares_str = str(shares)
              
         price = details.get("price") or 0
         try:
             price_val = float(price)
-            price_str = f"{price_val:.2f}¢" if price_val < 1 else f"${price_val:.2f}"
-            # Polymarket prices are often 0.xx, representing cents. Let's assume standard formatting.
             if price_val < 1.0:
                  price_str = f"{int(price_val * 100)}¢"
+            else:
+                 price_str = f"${price_val:,.2f}"
         except (ValueError, TypeError):
             price_str = str(price)
             
@@ -133,29 +131,25 @@ def _build_message(
         notional = details.get("notional") or details.get("total_notional") or 0
         try:
             notional_val = float(notional)
-            notional_str = f"${notional_val:,.2f}"
+            notional_str = f"${notional_val:,.0f}"
         except (ValueError, TypeError):
              notional_str = str(notional)
 
-        # Unique markets lifetime (using total_trades as proxy or placeholder if not available)
-        # The user asked for "unique markets lifetime". WalletStats has total_trades. 
-        # We don't have "unique markets" count in WalletStats easily, so we'll use Total Trades for now 
-        # or mock it if strictly required, but let's stick to what we have.
+        # Unique markets lifetime
         lifetime_trades = stats.total_trades if stats else "n/a"
         
         # Winrate
-        # Accuracy score is 0.0-1.0. Convert to %
         if stats and stats.accuracy_score is not None:
             winrate = f"{float(stats.accuracy_score) * 100:.1f}%"
         else:
             winrate = "n/a"
 
         # Format:
-        # Trader | Side | Trade
-        # Notional | Unique Markets | Winrate
+        # 👤 Trader | 💎 Side | 📈 Trade
+        # 💰 Notional: $1,234 | 📊 Trades: 123 | 🎯 Winrate: 65%
         
-        lines.append(f"Trader: {trader_link} | Side: {trade_side} | Trade: {trade_info}")
-        lines.append(f"Notional: {notional_str} | Lifetime Trades: {lifetime_trades} | Winrate: {winrate}")
+        lines.append(f"👤 {trader_link} | 💎 {trade_side} | 📈 {trade_info}")
+        lines.append(f"💰 <b>Notional: {notional_str}</b> | 📊 Trades: {lifetime_trades} | 🎯 Winrate: {winrate}")
         lines.append("") # Spacing between wallets
         
     return "\n".join(lines)
@@ -210,16 +204,21 @@ async def run_notifier() -> None:
                         latest_ts = max(latest_ts, alert.updated_at) if latest_ts else alert.updated_at
                         if alert.status not in {"watch", "high"}:
                             continue
+                        signal_query = (
+                            select(SignalEvent, WalletProfile, WalletStats)
+                            .outerjoin(WalletProfile, SignalEvent.wallet_profile_id == WalletProfile.id)
+                            .outerjoin(WalletStats, SignalEvent.wallet_address == WalletStats.wallet_address)
+                            .where(
+                                SignalEvent.market_id == alert.market_id,
+                                SignalEvent.side == alert.side,
+                            )
+                        )
+                        if alert.wallet_address:
+                            signal_query = signal_query.where(SignalEvent.wallet_address == alert.wallet_address)
+                            
                         signal_rows = (
                             session.execute(
-                                select(SignalEvent, WalletProfile, WalletStats)
-                                .outerjoin(WalletProfile, SignalEvent.wallet_profile_id == WalletProfile.id)
-                                .outerjoin(WalletStats, SignalEvent.wallet_address == WalletStats.wallet_address)
-                                .where(
-                                    SignalEvent.market_id == alert.market_id,
-                                    SignalEvent.side == alert.side,
-                                )
-                                .order_by(SignalEvent.observed_at.desc(), SignalEvent.created_at.desc())
+                                signal_query.order_by(SignalEvent.observed_at.desc(), SignalEvent.created_at.desc())
                                 .limit(WALLETS_LIMIT)
                             )
                             .all()

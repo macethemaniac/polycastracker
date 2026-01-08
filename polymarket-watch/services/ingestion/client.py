@@ -56,11 +56,30 @@ class IngestionClient:
         resp = self._client.get(self.markets_url)
         resp.raise_for_status()
         payload = resp.json()
-        raw_markets: Iterable[Any]
-        if isinstance(payload, dict) and "markets" in payload:
-            raw_markets = payload["markets"]
+        raw_markets: list[dict[str, Any]] = []
+        if isinstance(payload, list):
+            # Check if these are events with 'markets' inside
+            if any("markets" in item for item in payload[:5]):
+                for event in payload:
+                    event_markets = event.get("markets") or []
+                    # Add event metadata to markets if needed
+                    for m in event_markets:
+                        m["event_title"] = event.get("title")
+                        raw_markets.append(m)
+            else:
+                raw_markets = payload
+        elif isinstance(payload, dict):
+            if "markets" in payload:
+                raw_markets = payload["markets"]
+            elif "data" in payload:
+                raw_markets = payload["data"]
+            elif "events" in payload:
+                for event in payload["events"]:
+                    raw_markets.extend(event.get("markets") or [])
+            else:
+                raw_markets = []
         else:
-            raw_markets = payload or []
+            raw_markets = []
 
         normalized: list[dict[str, Any]] = []
         for item in raw_markets:
@@ -76,12 +95,21 @@ class IngestionClient:
             )
             if not external_id:
                 continue
+                
+            # Strictly filter for active and non-closed markets
+            if not item.get("active") or item.get("closed"):
+                continue
+                
+            question = item.get("question") or item.get("event_title") or item.get("name") or item.get("title")
+            if not question:
+                continue
+
             normalized.append(
                 {
                     "external_id": str(external_id),
-                    "name": item.get("question") or item.get("name") or item.get("title") or "",
+                    "name": str(question),
                     "category": item.get("category"),
-                    "status": item.get("status") or "active",
+                    "status": "active",
                     "resolved_at": _parse_datetime(
                         item.get("resolved_at")
                         or item.get("resolvedAt")

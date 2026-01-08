@@ -126,15 +126,17 @@ class Alert(Base):
     __tablename__ = "alerts"
     __table_args__ = (
         Index("ix_alerts_wallet_market_type", "wallet_profile_id", "market_id", "event_type"),
+        Index("ix_alerts_wallet_address_market", "wallet_address", "market_id"),
         Index("ix_alerts_created_at", "created_at"),
         Index("ix_alerts_status", "status"),
-        UniqueConstraint("market_id", "side", "event_type", name="uq_alerts_market_side_event"),
+        UniqueConstraint("market_id", "side", "event_type", "wallet_address", name="uq_alerts_market_side_event_wallet"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     wallet_profile_id: Mapped[int | None] = mapped_column(
         ForeignKey("wallet_profiles.id", ondelete="SET NULL")
     )
+    wallet_address: Mapped[str | None] = mapped_column(String(128))
     market_id: Mapped[int | None] = mapped_column(ForeignKey("markets.id", ondelete="SET NULL"))
     side: Mapped[str | None] = mapped_column(String(16))
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)

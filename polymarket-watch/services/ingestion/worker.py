@@ -142,7 +142,8 @@ def refresh_markets(state: ServiceState, client: IngestionClient) -> dict[str, M
     with state.session_factory() as session:
         markets = client.fetch_markets()
         snapshots = upsert_markets(session, markets)
-        logger.info("Refreshed markets", extra={"count": len(snapshots)})
+        active_count = sum(1 for m in snapshots.values() if _active_market(m))
+        logger.info("Refreshed markets", extra={"total": len(snapshots), "active": active_count})
         return snapshots
 
 

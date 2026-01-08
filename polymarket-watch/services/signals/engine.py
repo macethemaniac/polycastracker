@@ -36,7 +36,7 @@ class Signal:
 
 
 class SignalEngine:
-    BIG_NOTIONAL = Decimal("700")
+    BIG_NOTIONAL = Decimal("1000")
     LOW_ACTIVITY_WINDOW = timedelta(hours=24)
     LOW_ACTIVITY_MAX_TRADES = 2
     REPEAT_WINDOW = timedelta(minutes=10)
@@ -169,6 +169,8 @@ class SignalEngine:
                         score=float(notional),
                         details={
                             "notional": str(notional),
+                            "shares": str(trade.shares),
+                            "price": str(trade.price),
                             "recent_trades": recent_count,
                             "window_hours": self.LOW_ACTIVITY_WINDOW.total_seconds() / 3600,
                             "thresholds": {
@@ -199,6 +201,9 @@ class SignalEngine:
                         details={
                             "count": len(repeat_window),
                             "window_minutes": self.REPEAT_WINDOW.total_seconds() / 60,
+                            "notional": str(notional),
+                            "shares": str(trade.shares),
+                            "price": str(trade.price),
                             "why": "Multiple entries by same wallet/side in short window",
                         },
                         observed_at=trade.traded_at,
@@ -237,38 +242,6 @@ class SignalEngine:
             if history is not None:
                 history.append((trade.traded_at, trade.price))
 
-            # CLUSTERING
-            cluster_key = (trade.market_id, side)
-            cluster_window = cluster_windows[cluster_key]
-            cluster_window.append((trade.traded_at, wallet, notional))
-            cutoff = trade.traded_at - self.CLUSTER_WINDOW
-            while cluster_window and cluster_window[0][0] < cutoff:
-                cluster_window.popleft()
-            wallets_in_window = {w for _, w, _ in cluster_window}
-            if len(wallets_in_window) >= self.CLUSTER_MIN_WALLETS:
-                total_notional = sum(n for _, _, n in cluster_window)
-                if total_notional >= self.CLUSTER_MIN_NOTIONAL * len(wallets_in_window):
-                    signals.append(
-                        Signal(
-                            market_id=trade.market_id,
-                            wallet_address=wallet,
-                            side=side,
-                            signal_type="CLUSTERING",
-                            severity="medium",
-                            score=float(total_notional),
-                            details={
-                                "unique_wallets": len(wallets_in_window),
-                                "window_minutes": self.CLUSTER_WINDOW.total_seconds() / 60,
-                                "total_notional": str(total_notional),
-                                "thresholds": {
-                                    "min_wallets": self.CLUSTER_MIN_WALLETS,
-                                    "min_notional_per_wallet": str(self.CLUSTER_MIN_NOTIONAL),
-                                },
-                                "why": "Multiple wallets trading same side in short window",
-                            },
-                            observed_at=trade.traded_at,
-                        )
-                    )
 
             # EARLY_POSITIONING - Smart wallet detected
             smart_wallet = wallet_stats.get(wallet)
@@ -285,6 +258,8 @@ class SignalEngine:
                         score=accuracy * float(notional),
                         details={
                             "notional": str(notional),
+                            "shares": str(trade.shares),
+                            "price": str(trade.price),
                             "wallet_accuracy": accuracy,
                             "wallet_evaluated_trades": smart_wallet.evaluated_trades,
                             "wallet_correct_4h": smart_wallet.correct_4h,
