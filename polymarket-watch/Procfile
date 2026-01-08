@@ -1,0 +1,6 @@
+ingestion: poetry run python -m services.ingestion.worker
+profiling: poetry run python -m services.profiling.worker
+signals: poetry run python -m services.signals.worker
+scoring: poetry run python -m services.scoring.worker
+notifier: poetry run python -m services.notifier.worker
+bot: poetry run python -m apps.bot.main
