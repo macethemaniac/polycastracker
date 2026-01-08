@@ -36,7 +36,7 @@ class Signal:
 
 
 class SignalEngine:
-    BIG_NOTIONAL = Decimal("400")
+    BIG_NOTIONAL = Decimal("700")
     LOW_ACTIVITY_WINDOW = timedelta(hours=24)
     LOW_ACTIVITY_MAX_TRADES = 2
     REPEAT_WINDOW = timedelta(minutes=10)
